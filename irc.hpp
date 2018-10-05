@@ -34,7 +34,7 @@ struct Command
 
 class Client
 {
-	asio::io_service io;
+	asio::io_service& io;
 	asio::streambuf buf;
 	ip::tcp::resolver resolver{io};
 	ip::tcp::socket socket{io};
@@ -46,7 +46,13 @@ class Client
 
 	void internal_command_dispatch(const Command& raw_command);
 
+	void handle_ctcp(const Command& cmd);
+
 public:
+	Client(asio::io_service& p_io);
+
+	static std::string_view parse_username(std::string_view prefix);
+
 	std::string
 	    server,
 	    port = "6667",
@@ -64,7 +70,7 @@ public:
 
 	void command(Command cmd);
 
-	void start();
+	void initialize();
 };
 }
 

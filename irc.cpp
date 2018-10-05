@@ -25,6 +25,15 @@ Command::Command(std::string p_name, std::string p_single_parameter) :
 	parameters{p_single_parameter}
 {}
 
+Client::Client(asio::io_service& p_io) :
+	io{p_io}
+{}
+
+std::string_view Client::parse_username(std::string_view prefix)
+{
+	return prefix.substr(0, prefix.find('!'));
+}
+
 void Client::setup_command_dispatcher()
 {
 	asio::async_read_until(socket, buf, '\n', [this](auto error, size_t) {
@@ -80,9 +89,24 @@ void Client::setup_command_dispatcher()
 
 void Client::internal_command_dispatch(const Command& cmd)
 {
-	static const std::unordered_map<std::string_view, std::function<void(const Command&)>> base_handlers {{
+	const std::unordered_map<std::string_view, std::function<void(const Command&)>> base_handlers {{
 		{"ping", [this](const Command& cmd) {
 			command({"pong", cmd.parameters});
+		}},
+
+		{"privmsg", [this](const Command& cmd) {
+			// Sanity check
+			if (cmd.parameters.size() != 2)
+			{
+				return;
+			}
+
+			if (cmd.parameters[1].size() > 2
+			 && cmd.parameters[1].front() == '\x1'
+			 && cmd.parameters[1].back() == '\x1')
+			{
+				handle_ctcp(cmd);
+			}
 		}},
 
 		// TODO: find the most standard way as per RFC
@@ -92,6 +116,14 @@ void Client::internal_command_dispatch(const Command& cmd)
 	if (auto it = base_handlers.find(cmd.name); it != base_handlers.end())
 	{
 		it->second(cmd);
+	}
+}
+
+void Client::handle_ctcp(const Command& cmd)
+{
+	if (cmd.parameters[1] == "\x1VERSION\x1")
+	{
+		command({"NOTICE", {std::string{parse_username(cmd.prefix)}, "\x1VERSION", "AsuBot IRC library v1\x1"}});
 	}
 }
 
@@ -110,7 +142,9 @@ void Client::command(Command cmd)
 	{
 		composed += ' ';
 
-		if (it->find(' ') != std::string::npos)
+		bool is_ctcp = (*it)[0] == '\x1';
+
+		if (!is_ctcp && it->find(' ') != std::string::npos)
 		{
 			// If we aren't dealing with the last parameter, then there's something dubious - can't have spaces within that param.
 			if (it != cmd.parameters.end() - 1)
@@ -126,14 +160,14 @@ void Client::command(Command cmd)
 		composed += *it;
 	}
 
-	composed += '\n';
+	composed += "\r\n";
 
 	on_send(cmd);
 
 	asio::write(socket, asio::buffer(composed));
 }
 
-void Client::start()
+void Client::initialize()
 {
 	fmt::print("Connecting to {}:{}\n", server, port);
 	asio::connect(socket, resolver.resolve(server, port));
@@ -144,7 +178,5 @@ void Client::start()
 	// Send auth commands
 	command({"nick", nickname});
 	command({"user", {username, username, username, realname}});
-
-	io.run();
 }
 }
